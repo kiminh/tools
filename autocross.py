@@ -15,12 +15,13 @@ class AutoCross:
     __alpha = 1e-3
     __precision = 1e-4
     __beem_search_loop = 1000
-    __numeric_dis_level = 2
-    __numeric_dis_section_base = 3
+    __numeric_dis_level = 1
+    __numeric_dis_section_base = 2
     __field_wise_batch_size=pow(2,5)
     __field_wise_epoch = 100
     __momentum_beta = 0.9
     __feature_map = {}
+    __feature_dimension = {}
     
     cross_feature_set = set()
     original_feature_set = set()
@@ -47,8 +48,10 @@ class AutoCross:
                         col_val.append(1 if x==v else 0)    
                     self.__feature_map[col_key] = col_name
                     self.X[col_key] = col_val
+                    self.__feature_dimension[col_key] = fea
                     fea_idx += 1
             else:
+                feature_dimension = {}
                 #numeric feature discretization
                 if len(discretization_section) > 0:
                     print "function not yet develop"
@@ -58,8 +61,8 @@ class AutoCross:
                     min_v = min(data.loc[:, fea]) + self.__precision
                     t_df = pd.DataFrame()
                     feature_set = set()
-                    for i in range(1, self.__numeric_dis_level+1):
-                        total_sec_num = int(math.pow(self.__numeric_dis_section_base, i))
+                    for level_idx in range(1, self.__numeric_dis_level+1):
+                        total_sec_num = int(math.pow(self.__numeric_dis_section_base, level_idx))
                         sec = (max_v-min_v)*1.0/total_sec_num
                         for j in range(total_sec_num):
                             disc_fea = fea + '>=' + str(min_v+sec*j) \
@@ -71,28 +74,31 @@ class AutoCross:
                                         fv[i] = 1
                                 t_df[disc_fea] = fv
                             feature_set.add(disc_fea)
+                            feature_dimension[disc_fea] = fea+'_'+str(level_idx)
                     X_train, X_valid, Y_train,Y_valid = self.train_test_split(t_df, self.Y, test_size=0.3)
                     ###Wc = {fea:random.random() for fea in t_df.columns}
                     Wc = pd.Series(np.random.rand(), index=t_df.columns)
                     self.field_wise_LR(np.zeros(len(t_df),int), X_train, Y_train, Wc, t_df.columns)
                     candidate_auc = {}
-                    for fea in t_df.columns:
+                    for fea1 in t_df.columns:
                         y_pred = []
                         for i in range(len(X_valid)):
-                            Xc = X_valid.iloc[i][fea]
-                            _y = self.sigmod(Wc[fea] * Xc)
+                            Xc = X_valid.iloc[i][fea1]
+                            _y = self.sigmod(Wc[fea1] * Xc)
                             y_pred.append(_y)
-                        candidate_auc[fea] = roc_auc_score(Y_valid, y_pred)
+                        candidate_auc[fea1] = roc_auc_score(Y_valid, y_pred)
                     sorted_candidate_auc = sorted(candidate_auc.items(), key=lambda d:d[1], reverse=True)
                     candidate_feature = [sorted_candidate_auc[i][0] for i in range(max(len(sorted_candidate_auc)/2,1))]
                     
-                    for fea in candidate_feature:
+                    for fea1 in candidate_feature:
                         fk = 'f'+str(fea_idx)
-                        self.__feature_map[fk] = fea
-                        self.X[fk] = t_df[fea]
+                        self.__feature_map[fk] = fea1
+                        self.__feature_dimension[fk] = feature_dimension[fea1]
+                        self.X[fk] = t_df[fea1]
                         fea_idx += 1
         
         self.original_feature_set = set(self.__feature_map.keys())
+        print "discretize feature set len = ", len(self.original_feature_set)
 
 
     def value_candidate_feature(self, candidate_feature_list):
@@ -226,6 +232,9 @@ class AutoCross:
             for j in range(i+1, l):
                 feaB = lfs[j]
                 comb = sorted(list(self.getitem((feaA | feaB))))
+                dimension_num = len(set([self.__feature_dimension[f] for f in comb]))
+                if dimension_num != len(comb):
+                    continue
                 key = ",".join(imap(str, comb))
                 if key not in feature_set:
                     candidate_feature_set.add(tuple(comb))
@@ -246,7 +255,7 @@ class AutoCross:
             candidate_feature_set = self.create_candidate_feature_set()
             candidate_feature_list = list(candidate_feature_set)
             candidate_feature_map, candidate_feature_df = self.value_candidate_feature(candidate_feature_list)
-            #print candidate_feature_list
+            print "candidate feature len=",len(candidate_feature_list)
             
             #feature select with field-wise LR
             #X_train, X_valid, Y_train,Y_valid = train_test_split(self.X, self.Y, test_size=0.3, random_state=0)
@@ -298,9 +307,10 @@ print "####begin####"
 logreg = linear_model.LogisticRegression(C=1e-5)
 logreg.fit(X_train, Y_train)
 y_valid = logreg.predict_proba(X_valid)[:, 1]
-print "auc=",roc_auc_score(Y_valid, y_valid)
+print "columns =",len(X_train.columns)
+print "original auc =",roc_auc_score(Y_valid, y_valid)
 
-print "####process####"
+print "####preprocessing####"
 autocross = AutoCross(inputX, inputY, feature_type)
 cross_feature_set = autocross.run()
 print cross_feature_set
@@ -345,4 +355,4 @@ X_valid = X_valid.join(cross_val)
 logreg = linear_model.LogisticRegression(C=1e-5)
 logreg.fit(X_train, Y_train)
 y_valid = logreg.predict_proba(X_valid)[:, 1]
-print "auc=",roc_auc_score(Y_valid, y_valid)
+print "final auc =",roc_auc_score(Y_valid, y_valid)
